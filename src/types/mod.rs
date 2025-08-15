@@ -240,6 +240,12 @@ impl<const M: usize, const N: usize> Matrix<M, N> {
         }
     }
 
+    pub fn insert_column(&mut self, column: usize, vector: Vec<f64>) {
+        for i in 0..M {
+            self.data[i][column] = vector[i];
+        }
+    }
+
 }
 
 impl<const M: usize> Matrix<M, M> {
@@ -409,9 +415,62 @@ pub fn inverse<const M: usize, const N: usize>(m: &Matrix<M,N>) -> Matrix<M,N> {
     output_matrix
 }
 
+pub fn translation(x: f64, y: f64, z: f64) -> Matrix<4,4> {
+    let mut identity_matrix = Matrix::<4,4>::identity();
+    identity_matrix.insert_column(3, vec![x, y, z, 1.0]);
+    identity_matrix
+}
+
+pub fn scaling(x: f64, y: f64, z: f64) -> Matrix<4,4> {
+    let mut identity_matrix = Matrix::<4,4>::identity();
+    identity_matrix[(0,0)] = x;
+    identity_matrix[(1,1)] = y;
+    identity_matrix[(2,2)] = z;
+    identity_matrix
+}
+
+pub fn rotation_x(radians: f64) -> Matrix<4,4> {
+    let mut identity_matrix = Matrix::<4,4>::identity();
+    identity_matrix[(1,1)] = radians.cos();
+    identity_matrix[(1,2)] = -radians.sin();
+    identity_matrix[(2,1)] = radians.sin();
+    identity_matrix[(2,2)] = radians.cos();
+    identity_matrix
+}
+
+pub fn rotation_y(radians: f64) -> Matrix<4,4> {
+    let mut identity_matrix = Matrix::<4,4>::identity();
+    identity_matrix[(0,0)] = radians.cos();
+    identity_matrix[(0,2)] = radians.sin();
+    identity_matrix[(2,0)] = -radians.sin();
+    identity_matrix[(2,2)] = radians.cos();
+    identity_matrix
+}
+
+pub fn rotation_z(radians: f64) -> Matrix<4,4> {
+    let mut identity_matrix = Matrix::<4,4>::identity();
+    identity_matrix[(0,0)] = radians.cos();
+    identity_matrix[(0,1)] = -radians.sin();
+    identity_matrix[(1,0)] = radians.sin();
+    identity_matrix[(1,1)] = radians.cos();
+    identity_matrix
+}
+
+pub fn shearing(xy: f64, xz: f64, yx: f64, yz: f64, zx: f64, zy: f64) -> Matrix<4,4> {
+    let mut identity_matrix = Matrix::<4,4>::identity();
+    identity_matrix[(0,1)] = xy;
+    identity_matrix[(0,2)] = xz;
+    identity_matrix[(1,0)] = yx;
+    identity_matrix[(1,2)] = yz;
+    identity_matrix[(2,0)] = zx;
+    identity_matrix[(2,1)] = zy;
+    identity_matrix
+}
 #[cfg(test)]
 mod tests {
+    use std::f64::consts::PI;
     use std::ops::Index;
+    use num_traits::ToPrimitive;
     use super::*;
     #[test]
     fn test_point() {
@@ -872,4 +931,134 @@ mod tests {
         assert_eq!(matrix_c * inverse(&matrix_b), matrix_a);
     }
 
+    #[test]
+    fn test_multiply_by_tanslation_matrix() {
+        let transform_matrix = translation(5.0, -3.0, 2.0);
+        let point = Tuple4D::point(-3.0, 4.0, 5.0);
+        assert_eq!(transform_matrix * point, Tuple4D::point(2.0, 1.0, 7.0));
+    }
+    #[test]
+    fn test_multiply_by_inv_translation_matrix() {
+        let transform_matrix = translation(5.0, -3.0, 2.0);
+        let inv = inverse(&transform_matrix);
+        let point = Tuple4D::point(-3.0, 4.0, 5.0);
+        assert_eq!(inv * point, Tuple4D::point(-8.0, 7.0, 3.0));
+    }
+    #[test]
+    fn test_translation_not_affect_vectors() {
+        let transform_matrix = translation(5.0, -3.0, 2.0);
+        let vector = Tuple4D::vector(-3.0, 4.0, 5.0);
+        assert_eq!(transform_matrix * vector, vector);
+    }
+    #[test]
+    fn test_scaling_matrix_on_point() {
+        let transform_matrix = scaling(2.0, 3.0, 4.0);
+        let point = Tuple4D::point(-4.0, 6.0, 8.0);
+        assert_eq!(transform_matrix * point, Tuple4D::point(-8.0, 18.0, 32.0));
+    }
+    #[test]
+    fn test_scaling_matrix_on_vector() {
+        let transform_matrix = scaling(2.0, 3.0, 4.0);
+        let vector = Tuple4D::vector(-4.0, 6.0, 8.0);
+        assert_eq!(transform_matrix * vector, Tuple4D::vector(-8.0, 18.0, 32.0));
+    }
+    #[test]
+    fn test_inverse_scaling_matrix() {
+        let transform_matrix = scaling(2.0, 3.0, 4.0);
+        let inv_transform_matrix = inverse(&transform_matrix);
+        let vector = Tuple4D::vector(-4.0, 6.0, 8.0);
+        assert_eq!(inv_transform_matrix * vector, Tuple4D::vector(-2.0, 2.0, 2.0));
+    }
+    #[test]
+    fn test_reflection_across_x_by_scaling_matrix() {
+        let transform_matrix = scaling(-1.0, 1.0, 1.0);
+        let point = Tuple4D::point(2.0, 3.0, 4.0);
+        assert_eq!(transform_matrix * point, Tuple4D::point(-2.0, 3.0, 4.0));
+    }
+    #[test]
+    fn test_rotation_around_x() {
+        let point = Tuple4D::point(0.0, 1.0, 0.0);
+        let half_quarter_rot_matrix = rotation_x(PI/ 4.0);
+        let quarter_rot_matrix = rotation_x(PI / 2.0);
+        assert_eq!(half_quarter_rot_matrix * point, Tuple4D::point(0.0, f64::sqrt(2.0)/2.0, f64::sqrt(2.0)/2.0));
+        assert_eq!(quarter_rot_matrix * point, Tuple4D::point(0.0, 0.0, 1.0));
+
+    }
+    #[test]
+    fn test_inverse_rotation_around_x() {
+        let point = Tuple4D::point(0.0, 1.0, 0.0);
+        let half_quarter_rot_matrix = rotation_x(PI/ 4.0);
+        let inv_half_quarter_rot_matrix = inverse(&half_quarter_rot_matrix);
+        assert_eq!(inv_half_quarter_rot_matrix * point, Tuple4D::point(0.0, f64::sqrt(2.0)/2.0, -f64::sqrt(2.0)/2.0));
+    }
+    #[test]
+    fn test_rotation_around_y() {
+        let point = Tuple4D::point(0.0, 0.0, 1.0);
+        let half_quarter_rot_matrix = rotation_y(PI/4.0);
+        let quarter_rot_matrix = rotation_y(PI/2.0);
+        assert_eq!(half_quarter_rot_matrix * point, Tuple4D::point(f64::sqrt(2.0)/2.0, 0.0, f64::sqrt(2.0)/2.0));
+        assert_eq!(quarter_rot_matrix * point, Tuple4D::point(1.0, 0.0, 0.0));
+    }
+    #[test]
+    fn test_rotation_around_z() {
+        let point = Tuple4D::point(0.0, 1.0, 0.0);
+        let half_quarter_rot_matrix = rotation_z(PI/4.0);
+        let quarter_rot_matrix = rotation_z(PI/2.0);
+        assert_eq!(half_quarter_rot_matrix * point, Tuple4D::point(- f64::sqrt(2.0)/2.0, f64::sqrt(2.0)/2.0, 0.0));
+        assert_eq!(quarter_rot_matrix * point, Tuple4D::point(-1.0, 0.0, 0.0));
+    }
+    #[test]
+    fn test_shearing_matrix_x_in_prop_y() {
+        let transform_matrix = shearing(0.0, 1.0, 0.0, 0.0, 0.0, 0.0);
+        let point = Tuple4D::point(2.0, 3.0, 4.0);
+        assert_eq!(transform_matrix * point, Tuple4D::point(6.0, 3.0, 4.0));
+    }
+    #[test]
+    fn test_shearing_matrix_y_in_prop_x() {
+        let transform_matrix = shearing(0.0, 0.0, 1.0, 0.0, 0.0, 0.0);
+        let point = Tuple4D::point(2.0, 3.0, 4.0);
+        assert_eq!(transform_matrix * point, Tuple4D::point(2.0, 5.0, 4.0));
+    }
+
+    #[test]
+    fn test_shearing_matrix_y_in_prop_() {
+        let transform_matrix = shearing(0.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+        let point = Tuple4D::point(2.0, 3.0, 4.0);
+        assert_eq!(transform_matrix * point, Tuple4D::point(2.0, 7.0, 4.0));
+    }
+
+    #[test]
+    fn test_shearing_matrix_z_in_prop_x() {
+        let transform_matrix = shearing(0.0, 0.0, 0.0, 0.0, 1.0, 0.0);
+        let point = Tuple4D::point(2.0, 3.0, 4.0);
+        assert_eq!(transform_matrix * point, Tuple4D::point(2.0, 3.0, 6.0));
+    }
+    #[test]
+    fn test_shearing_matrix_z_in_prop_y() {
+        let transform_matrix = shearing(0.0, 0.0, 0.0, 0.0, 0.0, 1.0 );
+        let point = Tuple4D::point(2.0, 3.0, 4.0);
+        assert_eq!(transform_matrix * point, Tuple4D::point(2.0, 3.0, 7.0));
+    }
+    #[test]
+    fn test_transformations_in_sequence() {
+        let point = Tuple4D::point(1.0, 0.0, 1.0);
+        let a = rotation_x(PI/2.0);
+        let b = scaling(5.0, 5.0, 5.0);
+        let c = translation(10.0, 5.0, 7.0);
+        let point_2 = a * point;
+        assert_eq!(point_2, Tuple4D::point(1.0, -1.0, 0.0));
+        let point_3 = b * point_2;
+        assert_eq!(point_3, Tuple4D::point(5.0, -5.0, 0.0));
+        let point_4 = c * point_3;
+        assert_eq!(point_4, Tuple4D::point(15.0, 0.0, 7.0));
+    }
+    #[test]
+    fn test_transformations_chained() {
+        let point = Tuple4D::point(1.0, 0.0, 1.0);
+        let a = rotation_x(PI/2.0);
+        let b = scaling(5.0, 5.0, 5.0);
+        let c = translation(10.0, 5.0, 7.0);
+        let transformation_matrix = c * b * a;
+        assert_eq!(transformation_matrix * point, Tuple4D::point(15.0, 0.0, 7.0));
+    }
 }
