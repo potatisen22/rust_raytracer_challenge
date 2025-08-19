@@ -483,7 +483,7 @@ pub fn position(ray: &Ray, t: f64) -> Tuple4D {
     ray.origin + ray.direction * t
 }
 
-pub fn transform(ray: Ray, m: &Matrix<4,4>) -> Ray {
+pub fn transform(ray: &Ray, m: &Matrix<4,4>) -> Ray {
     let mut output_ray = Ray::new(Tuple4D::point(0.0, 0.0, 0.0), Tuple4D::vector(0.0, 0.0, 0.0));
     output_ray.origin = *m * ray.origin;
     output_ray.direction = *m * ray.direction;
@@ -494,6 +494,7 @@ pub fn transform(ray: Ray, m: &Matrix<4,4>) -> Ray {
 pub struct Sphere {
     pub id: u64,
     pub transform: Matrix::<4,4>,
+    pub material: Material
 }
 
 impl PartialEq for Sphere {
@@ -505,11 +506,11 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 pub fn sphere() -> Sphere {
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    Sphere { id, transform: Matrix::<4,4>::identity() }
+    Sphere { id, transform: Matrix::<4,4>::identity(), material: material() }
 }
 
-pub fn set_transform(sphere: &mut Sphere, m: Matrix<4,4>) {
-    sphere.transform = m;
+pub fn set_transform(sphere: &mut Sphere, m: &Matrix<4,4>) {
+    sphere.transform = *m;
 }
 
 
@@ -528,9 +529,7 @@ pub fn intersection(t: f64, sphere: &Sphere ) -> Intersection {
     Intersection { t, object: *sphere }
 }
 
-
-
-pub fn intersect(sphere: &Sphere, ray: Ray) -> Vec<Intersection> {
+pub fn intersect(sphere: &Sphere, ray: &Ray) -> Vec<Intersection> {
     let ray2 = transform(ray, &inverse(&sphere.transform));
     let sphere_to_ray = ray2.origin - Tuple4D::point(0.0, 0.0, 0.0);
     let a = dot(&ray2.direction, &ray2.direction);
@@ -558,6 +557,78 @@ pub fn hit(intersections: &Intersections) -> Option<Intersection> {
     let mut hit_list = intersections.clone();
     hit_list.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap());
     hit_list.into_iter().find(|i| i.t >= 0.0)
+}
+
+pub fn normal_at(sphere: &Sphere, point: Tuple4D) -> Tuple4D {
+    let object_point = inverse(&sphere.transform) * point;
+    let object_normal = object_point-Tuple4D::point(0.0, 0.0, 0.0);
+    let mut world_normal = transpose(inverse(&sphere.transform)) * object_normal;
+    world_normal.w = 0.0;
+    world_normal.normalize()
+}
+
+pub fn reflect(vector: Tuple4D, normal: Tuple4D) -> Tuple4D {
+    vector - normal * 2.0 * dot(&vector, &normal)
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Light {
+    pub position: Tuple4D,
+    pub intensity: Color
+}
+
+pub fn point_light(position: Tuple4D, intensity: Color) -> Light {
+    Light { position, intensity }
+}
+#[derive(Debug, Clone, Copy)]
+pub struct Material {
+    pub color: Color,
+    pub ambient: f64,
+    pub diffuse: f64,
+    pub specular: f64,
+    pub shininess: f64
+}
+
+pub fn material() -> Material {
+    Material {
+        color: color(1.0, 1.0, 1.0),
+        ambient: 0.1,
+        diffuse: 0.9,
+        specular: 0.9,
+        shininess: 200.0
+    }
+}
+
+impl PartialEq for Material {
+    fn eq(&self, other: &Self) -> bool {
+        self.color == other.color && self.ambient == other.ambient && self.diffuse == other.diffuse && self.specular == other.specular && self.shininess == other.shininess
+    }
+}
+pub fn lighting(material: Material, light: Light, point: Tuple4D, eye: Tuple4D, object_normal: Tuple4D) -> Color {
+    //Combine surface and light color/intensity
+    let effective_color = material.color * light.intensity;
+    //Direction to light source
+    let light_vector = (light.position - point).normalize();
+    //compute ambient contribution
+    let ambient = effective_color * material.ambient;
+    let mut diffuse = color(0.0, 0.0, 0.0);
+    let mut specular = color(0.0, 0.0, 0.0);
+    //light_dot_normal represent consine of the nagle between
+    //light vector and normal vector. negative numbers means that
+    //light is on the other side of the surface
+    let light_dot_normal = dot(&light_vector, &object_normal);
+    if !(light_dot_normal < 0.0) {
+        diffuse = effective_color * material.diffuse * light_dot_normal;
+        //reflect_dot_ete represents the cosine of the angle between
+        //reflection vector and eye vector. Negative number = light reflects away from eye
+        let reflect_vector = reflect(-light_vector, object_normal);
+        let reflect_dot_eye = dot(&reflect_vector, &eye);
+        if reflect_dot_eye > 0.0 {
+            let factor = f64::powf(reflect_dot_eye, material.shininess);
+            specular = light.intensity * material.specular * factor;
+        }
+    }
+   ambient + diffuse + specular
 }
 
 #[cfg(test)]
@@ -1177,7 +1248,7 @@ mod tests {
     fn test_ray_intersecting_sphere() {
         let ray = Ray::new(Tuple4D::point(0.0, 0.0, -5.0),Tuple4D::vector(0.0, 0.0, 1.0));
         let sphere = sphere();
-        let sphere_intersection = intersect(&sphere, ray);
+        let sphere_intersection = intersect(&sphere, &ray);
         assert_eq!(sphere_intersection.len(), 2);
         assert_eq!(sphere_intersection[0].t, 4.0);
         assert_eq!(sphere_intersection[1].t, 6.0);
@@ -1186,7 +1257,7 @@ mod tests {
     fn test_ray_intersect_tangent() {
         let ray = Ray::new(Tuple4D::point(0.0, 1.0, -5.0),Tuple4D::vector(0.0, 0.0, 1.0));
         let sphere = sphere();
-        let sphere_intersection = intersect(&sphere, ray);
+        let sphere_intersection = intersect(&sphere, &ray);
         assert_eq!(sphere_intersection.len(), 2);
         assert_eq!(sphere_intersection[0].t, 5.0);
         assert_eq!(sphere_intersection[1].t, 5.0);
@@ -1195,14 +1266,14 @@ mod tests {
     fn test_ray_misses_sphere() {
         let ray = Ray::new(Tuple4D::point(0.0, 2.0, -5.0), Tuple4D::vector(0.0, 0.0, 1.0));
         let sphere = sphere();
-        let sphere_intersection = intersect(&sphere, ray);
+        let sphere_intersection = intersect(&sphere, &ray);
         assert_eq!(sphere_intersection.len(), 0);
     }
     #[test]
     fn test_ray_originates_inside_sphere() {
         let ray = Ray::new(Tuple4D::point(0.0, 0.0, 0.0), Tuple4D::vector(0.0, 0.0, 1.0));
         let sphere = sphere();
-        let sphere_intersection = intersect(&sphere, ray);
+        let sphere_intersection = intersect(&sphere, &ray);
         assert_eq!(sphere_intersection.len(), 2);
         assert_eq!(sphere_intersection[0].t, -1.0);
         assert_eq!(sphere_intersection[1].t, 1.0);
@@ -1211,7 +1282,7 @@ mod tests {
     fn test_sphere_is_behind_ray() {
         let ray = Ray::new(Tuple4D::point(0.0, 0.0, 5.0), Tuple4D::vector(0.0, 0.0, 1.0));
         let sphere = sphere();
-        let sphere_intersection = intersect(&sphere, ray);
+        let sphere_intersection = intersect(&sphere, &ray);
         assert_eq!(sphere_intersection.len(), 2);
         assert_eq!(sphere_intersection[0].t, -6.0);
         assert_eq!(sphere_intersection[1].t, -4.0);
@@ -1237,7 +1308,7 @@ mod tests {
     fn test_intersect_sets_object_of_intersection() {
         let ray = Ray::new(Tuple4D::point(0.0, 0.0, -5.0), Tuple4D::vector(0.0, 0.0, 1.0));
         let sphere = sphere();
-        let xs = intersect(&sphere, ray);
+        let xs = intersect(&sphere, &ray);
         assert_eq!(xs.len(), 2);
         assert_eq!(xs[0].object, sphere);
         assert_eq!(xs[1].object, sphere);
@@ -1284,7 +1355,7 @@ mod tests {
     fn test_translating_a_ray() {
         let original_ray = Ray::new(Tuple4D::point(1.0, 2.0, 3.0), Tuple4D::vector(0.0, 1.0, 0.0));
         let translation_matrix = translation(3.0, 4.0, 5.0);
-        let translated_ray = transform(original_ray, &translation_matrix);
+        let translated_ray = transform(&original_ray, &translation_matrix);
         assert_eq!(translated_ray.origin, Tuple4D::point(4.0, 6.0, 8.0));
         assert_eq!(translated_ray.direction, Tuple4D::vector(0.0, 1.0, 0.0));
     }
@@ -1292,7 +1363,7 @@ mod tests {
     fn test_scaling_ray() {
         let original_ray = Ray::new(Tuple4D::point(1.0, 2.0, 3.0), Tuple4D::vector(0.0, 1.0, 0.0));
         let scaling_matrix = scaling(2.0, 3.0, 4.0);
-        let scaled_ray = transform(original_ray, &scaling_matrix);
+        let scaled_ray = transform(&original_ray, &scaling_matrix);
         assert_eq!(scaled_ray.origin, Tuple4D::point(2.0, 6.0, 12.0));
         assert_eq!(scaled_ray.direction, Tuple4D::vector(0.0, 3.0, 0.0));
     }
@@ -1306,7 +1377,7 @@ mod tests {
     fn test_changing_sphere_transformation() {
         let mut sphere = sphere();
         let translation_matrix = translation(2.0, 3.0, 4.0);
-        set_transform(&mut sphere, translation_matrix);
+        set_transform(&mut sphere, &translation_matrix);
         sphere.transform = translation_matrix;
         assert_eq!(sphere.transform, translation_matrix);
     }
@@ -1314,8 +1385,8 @@ mod tests {
     fn test_intersect_scaled_sphere_with_ray() {
         let ray = Ray::new(Tuple4D::point(0.0, 0.0, -5.0), Tuple4D::vector(0.0, 0.0, 1.0));
         let mut sphere = sphere();
-        set_transform(&mut sphere, scaling(2.0, 2.0, 2.0));
-        let xs = intersect(&sphere, ray);
+        set_transform(&mut sphere, &scaling(2.0, 2.0, 2.0));
+        let xs = intersect(&sphere, &ray);
         assert_eq!(xs.len(), 2);
         assert_eq!(xs[0].t, 3.0);
         assert_eq!(xs[1].t, 7.0);
@@ -1324,8 +1395,147 @@ mod tests {
     fn test_intersect_translated_sphere_with_ray() {
         let ray = Ray::new(Tuple4D::point(0.0, 0.0, -5.0), Tuple4D::vector(0.0, 0.0, 1.0));
         let mut sphere = sphere();
-        set_transform(&mut sphere, translation(5.0, 0.0, 0.0));
-        let xs = intersect(&sphere, ray);
+        set_transform(&mut sphere, &translation(5.0, 0.0, 0.0));
+        let xs = intersect(&sphere, &ray);
         assert_eq!(xs.len(), 0);
+    }
+
+
+
+    #[test]
+    fn test_normal_on_sphere_at_point_on_x_axis() {
+        let my_sphere = sphere();
+        let my_normal = normal_at(&my_sphere,Tuple4D::point(1.0, 0.0, 0.0));
+        assert_eq!(my_normal, Tuple4D::vector(1.0, 0.0, 0.0));
+    }
+    #[test]
+    fn test_normal_on_sphere_at_point_on_y_axis() {
+        let my_sphere = sphere();
+        let my_normal = normal_at(&my_sphere,Tuple4D::point(0.0, 1.0, 0.0));
+        assert_eq!(my_normal, Tuple4D::vector(0.0, 1.0, 0.0));
+    }
+    #[test]
+    fn test_normal_on_sphere_at_point_on_z_axis() {
+        let my_sphere = sphere();
+        let my_normal = normal_at(&my_sphere,Tuple4D::point(0.0, 0.0, 1.0));
+        assert_eq!(my_normal, Tuple4D::vector(0.0, 0.0, 1.0));
+    }
+    #[test]
+    fn test_normal_on_sphere_at_nonaxial_point() {
+        let my_sphere = sphere();
+        let my_normal = normal_at(&my_sphere,Tuple4D::point(f64::sqrt(3.0)/3.0, f64::sqrt(3.0)/3.0, f64::sqrt(3.0)/3.0));
+        assert_eq!(my_normal, Tuple4D::vector(f64::sqrt(3.0)/3.0, f64::sqrt(3.0)/3.0, f64::sqrt(3.0)/3.0));
+    }
+    #[test]
+    fn test_normal_is_normalized_vector() {
+        let my_sphere = sphere();
+        let my_normal = normal_at(&my_sphere,Tuple4D::point(f64::sqrt(3.0)/3.0, f64::sqrt(3.0)/3.0, f64::sqrt(3.0)/3.0));
+        assert_eq!(my_normal.normalize(), my_normal);
+    }
+    #[test]
+    fn test_normal_on_translated_sphere() {
+        let mut my_sphere = sphere();
+        set_transform(&mut my_sphere, &translation(0.0, 1.0, 0.0));
+        let my_normal = normal_at(&my_sphere,Tuple4D::point(0.0, 1.70711, -0.70711));
+        assert_eq!(my_normal, Tuple4D::vector(0.0, 0.70711, -0.70711));
+    }
+    #[test]
+    fn test_normal_on_transformed_sphere() {
+        let mut my_sphere = sphere();
+        let transform_matrix = scaling(1.0, 0.5, 1.0)* rotation_z(PI/5.0);
+        set_transform(&mut my_sphere, &transform_matrix);
+        let my_normal = normal_at(&my_sphere,Tuple4D::point(0.0, f64::sqrt(2.0)/2.0, -f64::sqrt(2.0)/2.0));
+        assert_eq!(my_normal, Tuple4D::vector(0.0, 0.97014, -0.24254));
+    }
+    #[test]
+    fn test_reflecting_vector_approaches_45_degrees() {
+        let in_vector = Tuple4D::vector(1.0, -1.0, 0.0);
+        let normal_of_surface = Tuple4D::vector(0.0, 1.0, 0.0);
+        let reflection = reflect(in_vector, normal_of_surface);
+        assert_eq!(reflection, Tuple4D::vector(1.0, 1.0, 0.0));
+    }
+    #[test]
+    fn test_reflection_off_slanted_surface() {
+        let in_vector = Tuple4D::vector(0.0, -1.0, 0.0);
+        let normal_of_surface = Tuple4D::vector(f64::sqrt(2.0)/2.0, f64::sqrt(2.0)/2.0, 0.0);
+        assert_eq!(reflect(in_vector, normal_of_surface), Tuple4D::vector(1.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn test_point_light_source() {
+        let intensity = color(1.0, 1.0, 1.0);
+        let position = point(0.0, 0.0, 0.0);
+        let light = point_light(position, intensity);
+        assert_eq!(light.position, position);
+        assert_eq!(light.intensity, intensity);
+    }
+    #[test]
+    fn test_material_default_values() {
+        let my_material = material();
+        assert_eq!(my_material.color, color(1.0, 1.0, 1.0));
+        assert_eq!(my_material.ambient, 0.1);
+        assert_eq!(my_material.diffuse, 0.9);
+        assert_eq!(my_material.specular, 0.9);
+        assert_eq!(my_material.shininess, 200.0);
+    }
+    #[test]
+    fn test_assign_material_to_sphere() {
+        let mut my_sphere = sphere();
+        let mut my_material = material();
+        my_material.ambient = 1.0;
+        my_sphere.material = my_material;
+        assert_eq!(my_sphere.material, my_material);
+
+    }
+
+    #[test]
+    fn test_lighting_with_eye_between_light_and_surface() {
+        let material = material();
+        let position = point(0.0, 0.0, 0.0);
+        let eye_v = vector(0.0, 0.0, -1.0);
+        let normal_v = vector(0.0, 0.0, -1.0);
+        let light = point_light(point(0.0, 0.0, -10.0), color(1.0, 1.0, 1.0));
+        let result = lighting(material, light, position, eye_v, normal_v);
+        assert_eq!(result, color(1.9, 1.9, 1.9));
+    }
+    #[test]
+    fn test_lighting_with_eye_between_light_and_surface_eye_offset_45_degrees() {
+        let material = material();
+        let position = point(0.0, 0.0, 0.0);
+        let eye_v = vector(0.0, f64::sqrt(2.0)/2.0, f64::sqrt(2.0)/2.0);
+        let normal_v = vector(0.0, 0.0, -1.0);
+        let light = point_light(point(0.0, 0.0, -10.0), color(1.0, 1.0, 1.0));
+        let result = lighting(material, light, position, eye_v, normal_v);
+        assert_eq!(result, color(1.0, 1.0, 1.0));
+    }
+    #[test]
+    fn test_lighting_with_eye_opposite_surface_light_offset_45_degrees() {
+        let material = material();
+        let position = point(0.0, 0.0, 0.0);
+        let eye_v = vector(0.0, 0.0, -1.0);
+        let normal_v = vector(0.0, 0.0, -1.0);
+        let light = point_light(point(0.0, 10.0, -10.0), color(1.0, 1.0, 1.0));
+        let result = lighting(material, light, position, eye_v, normal_v);
+        assert_eq!(result, color(0.7364, 0.7364, 0.7364));
+    }
+    #[test]
+    fn test_lighting_with_eye_in_path_of_reflection_vector() {
+        let material = material();
+        let position = point(0.0, 0.0, 0.0);
+        let eye_v = vector(0.0, -f64::sqrt(2.0)/2.0, -f64::sqrt(2.0)/2.0);
+        let normal_v = vector(0.0, 0.0, -1.0);
+        let light = point_light(point(0.0, 10.0, -10.0), color(1.0, 1.0, 1.0));
+        let result = lighting(material, light, position, eye_v, normal_v);
+        assert_eq!(result, color(1.6364, 1.6364, 1.6364));
+    }
+    #[test]
+    fn test_lighting_with_light_behind_surface() {
+        let material = material();
+        let position = point(0.0, 0.0, 0.0);
+        let eye_v = vector(0.0, 0.0, -1.0);
+        let normal_v = vector(0.0, 0.0, -1.0);
+        let light = point_light(point(0.0, 0.0, 10.0), color(1.0, 1.0, 1.0));
+        let result = lighting(material, light, position, eye_v, normal_v);
+        assert_eq!(result, color(0.1, 0.1, 0.1));
     }
 }
