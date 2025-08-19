@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
+use std::sync::atomic::{AtomicU64, Ordering};
+
 const EPSILON: f64 = 0.00001;
 
 #[derive(Debug, Copy, Clone)]
@@ -466,6 +468,98 @@ pub fn shearing(xy: f64, xz: f64, yx: f64, yz: f64, zx: f64, zy: f64) -> Matrix<
     identity_matrix[(2,1)] = zy;
     identity_matrix
 }
+
+pub struct Ray {
+    pub origin: Tuple4D,
+    pub direction: Tuple4D
+}
+impl Ray {
+    pub fn new(origin: Tuple4D, direction: Tuple4D) -> Ray {
+        Ray { origin, direction }
+    }
+}
+
+pub fn position(ray: &Ray, t: f64) -> Tuple4D {
+    ray.origin + ray.direction * t
+}
+
+pub fn transform(ray: Ray, m: &Matrix<4,4>) -> Ray {
+    let mut output_ray = Ray::new(Tuple4D::point(0.0, 0.0, 0.0), Tuple4D::vector(0.0, 0.0, 0.0));
+    output_ray.origin = *m * ray.origin;
+    output_ray.direction = *m * ray.direction;
+    output_ray
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Sphere {
+    pub id: u64,
+    pub transform: Matrix::<4,4>,
+}
+
+impl PartialEq for Sphere {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+pub fn sphere() -> Sphere {
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    Sphere { id, transform: Matrix::<4,4>::identity() }
+}
+
+pub fn set_transform(sphere: &mut Sphere, m: Matrix<4,4>) {
+    sphere.transform = m;
+}
+
+
+#[derive(Debug, Clone, Copy)]
+pub struct Intersection {
+    pub t: f64,
+    pub object: Sphere
+}
+
+impl PartialEq for Intersection {
+    fn eq(&self, other: &Self) -> bool {
+        self.object == other.object && self.t == other.t
+    }
+}
+pub fn intersection(t: f64, sphere: &Sphere ) -> Intersection {
+    Intersection { t, object: *sphere }
+}
+
+
+
+pub fn intersect(sphere: &Sphere, ray: Ray) -> Vec<Intersection> {
+    let ray2 = transform(ray, &inverse(&sphere.transform));
+    let sphere_to_ray = ray2.origin - Tuple4D::point(0.0, 0.0, 0.0);
+    let a = dot(&ray2.direction, &ray2.direction);
+    let b = 2.0 * dot(&ray2.direction, &sphere_to_ray);
+    let c = dot(&sphere_to_ray, &sphere_to_ray) - 1.0;
+    let discriminant: f64 = (b * b) - (4.0 * a * c);
+    if discriminant < 0.0 {
+        return vec![];
+    };
+    let t1 = (-b - f64::sqrt(discriminant)) / (2.0 * a);
+    let t2 = (-b + f64::sqrt(discriminant)) / (2.0 * a);
+    vec![intersection(t1, sphere),intersection(t2, sphere)]
+}
+
+pub type Intersections = Vec<Intersection>;
+
+pub fn intersections<I>(iter: I) -> Intersections
+where I: IntoIterator<Item = Intersection>,
+{
+    let xs: Vec<Intersection> = iter.into_iter().collect();
+    xs
+}
+
+pub fn hit(intersections: &Intersections) -> Option<Intersection> {
+    let mut hit_list = intersections.clone();
+    hit_list.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap());
+    hit_list.into_iter().find(|i| i.t >= 0.0)
+}
+
 #[cfg(test)]
 mod tests {
     use std::f64::consts::PI;
@@ -1060,5 +1154,178 @@ mod tests {
         let c = translation(10.0, 5.0, 7.0);
         let transformation_matrix = c * b * a;
         assert_eq!(transformation_matrix * point, Tuple4D::point(15.0, 0.0, 7.0));
+    }
+
+    #[test]
+    fn test_create_and_query_ray() {
+        let origin = Tuple4D::point(1.0, 2.0, 3.0);
+        let direction = Tuple4D::vector(4.0, 5.0, 6.0);
+        let r = Ray::new(origin, direction);
+        assert_eq!(r.origin, origin);
+        assert_eq!(r.direction, direction);
+    }
+
+    #[test]
+    fn test_compute_point_along_ray() {
+        let r = Ray::new(Tuple4D::point(2.0, 3.0, 4.0), Tuple4D::vector(1.0, 0.0, 0.0));
+        assert_eq!(position(&r, 0.0), Tuple4D::point(2.0, 3.0, 4.0));
+        assert_eq!(position(&r, 1.0), Tuple4D::point(3.0, 3.0, 4.0));
+        assert_eq!(position(&r, -1.0), Tuple4D::point(1.0, 3.0, 4.0));
+        assert_eq!(position(&r, 2.5), Tuple4D::point(4.5, 3.0, 4.0));
+    }
+    #[test]
+    fn test_ray_intersecting_sphere() {
+        let ray = Ray::new(Tuple4D::point(0.0, 0.0, -5.0),Tuple4D::vector(0.0, 0.0, 1.0));
+        let sphere = sphere();
+        let sphere_intersection = intersect(&sphere, ray);
+        assert_eq!(sphere_intersection.len(), 2);
+        assert_eq!(sphere_intersection[0].t, 4.0);
+        assert_eq!(sphere_intersection[1].t, 6.0);
+    }
+    #[test]
+    fn test_ray_intersect_tangent() {
+        let ray = Ray::new(Tuple4D::point(0.0, 1.0, -5.0),Tuple4D::vector(0.0, 0.0, 1.0));
+        let sphere = sphere();
+        let sphere_intersection = intersect(&sphere, ray);
+        assert_eq!(sphere_intersection.len(), 2);
+        assert_eq!(sphere_intersection[0].t, 5.0);
+        assert_eq!(sphere_intersection[1].t, 5.0);
+    }
+    #[test]
+    fn test_ray_misses_sphere() {
+        let ray = Ray::new(Tuple4D::point(0.0, 2.0, -5.0), Tuple4D::vector(0.0, 0.0, 1.0));
+        let sphere = sphere();
+        let sphere_intersection = intersect(&sphere, ray);
+        assert_eq!(sphere_intersection.len(), 0);
+    }
+    #[test]
+    fn test_ray_originates_inside_sphere() {
+        let ray = Ray::new(Tuple4D::point(0.0, 0.0, 0.0), Tuple4D::vector(0.0, 0.0, 1.0));
+        let sphere = sphere();
+        let sphere_intersection = intersect(&sphere, ray);
+        assert_eq!(sphere_intersection.len(), 2);
+        assert_eq!(sphere_intersection[0].t, -1.0);
+        assert_eq!(sphere_intersection[1].t, 1.0);
+    }
+    #[test]
+    fn test_sphere_is_behind_ray() {
+        let ray = Ray::new(Tuple4D::point(0.0, 0.0, 5.0), Tuple4D::vector(0.0, 0.0, 1.0));
+        let sphere = sphere();
+        let sphere_intersection = intersect(&sphere, ray);
+        assert_eq!(sphere_intersection.len(), 2);
+        assert_eq!(sphere_intersection[0].t, -6.0);
+        assert_eq!(sphere_intersection[1].t, -4.0);
+    }
+    #[test]
+    fn test_intersection_function() {
+        let sphere = sphere();
+        let i = intersection(3.5, &sphere);
+        assert_eq!(i.t, 3.5);
+        assert_eq!(i.object, sphere);
+    }
+    #[test]
+    fn test_aggregating_intersections() {
+        let sphere = sphere();
+        let inter1 = intersection(1.0, &sphere);
+        let inter2 = intersection(2.0, &sphere);
+        let xs = intersections([inter1, inter2]);
+        assert_eq!(xs.len(), 2);
+        assert_eq!(xs[0].t, 1.0);
+        assert_eq!(xs[1].t, 2.0);
+    }
+    #[test]
+    fn test_intersect_sets_object_of_intersection() {
+        let ray = Ray::new(Tuple4D::point(0.0, 0.0, -5.0), Tuple4D::vector(0.0, 0.0, 1.0));
+        let sphere = sphere();
+        let xs = intersect(&sphere, ray);
+        assert_eq!(xs.len(), 2);
+        assert_eq!(xs[0].object, sphere);
+        assert_eq!(xs[1].object, sphere);
+    }
+    #[test]
+    fn test_hit_all_intersections_positive() {
+        let s = sphere();
+        let i1 = intersection(1.0, &s);
+        let i2 = intersection(2.0, &s);
+        let xs = intersections([i1, i2]);
+        let i = hit(&xs);
+        assert_eq!(i.unwrap(), i1);
+    }
+    #[test]
+    fn test_hit_some_intersections_negative() {
+        let s = sphere();
+        let i1 = intersection(-1.0, &s);
+        let i2 = intersection(1.0, &s);
+        let xs = intersections([i2, i1]);
+        let i = hit(&xs);
+        assert_eq!(i.unwrap(), i2);
+    }
+    #[test]
+    fn test_hit_all_intersections_negative() {
+        let s = sphere();
+        let i1 = intersection(-2.0, &s);
+        let i2 = intersection(-1.0, &s);
+        let xs = intersections([i2, i1]);
+        let i = hit(&xs);
+        assert_eq!(i, None);
+    }
+    #[test]
+    fn test_hit_always_lowest_nonnegative_intersection() {
+        let s = sphere();
+        let i1 = intersection(5.0, &s);
+        let i2 = intersection(7.0, &s);
+        let i3 = intersection(-3.0, &s);
+        let i4 = intersection(2.0, &s);
+        let xs = intersections([i1, i2, i3, i4]);
+        let i = hit(&xs);
+        assert_eq!(i.unwrap(), i4);
+    }
+    #[test]
+    fn test_translating_a_ray() {
+        let original_ray = Ray::new(Tuple4D::point(1.0, 2.0, 3.0), Tuple4D::vector(0.0, 1.0, 0.0));
+        let translation_matrix = translation(3.0, 4.0, 5.0);
+        let translated_ray = transform(original_ray, &translation_matrix);
+        assert_eq!(translated_ray.origin, Tuple4D::point(4.0, 6.0, 8.0));
+        assert_eq!(translated_ray.direction, Tuple4D::vector(0.0, 1.0, 0.0));
+    }
+    #[test]
+    fn test_scaling_ray() {
+        let original_ray = Ray::new(Tuple4D::point(1.0, 2.0, 3.0), Tuple4D::vector(0.0, 1.0, 0.0));
+        let scaling_matrix = scaling(2.0, 3.0, 4.0);
+        let scaled_ray = transform(original_ray, &scaling_matrix);
+        assert_eq!(scaled_ray.origin, Tuple4D::point(2.0, 6.0, 12.0));
+        assert_eq!(scaled_ray.direction, Tuple4D::vector(0.0, 3.0, 0.0));
+    }
+    #[test]
+    fn test_sphere_default_transformation() {
+        let s = sphere();
+        assert_eq!(s.transform, Matrix::identity());
+    }
+
+    #[test]
+    fn test_changing_sphere_transformation() {
+        let mut sphere = sphere();
+        let translation_matrix = translation(2.0, 3.0, 4.0);
+        set_transform(&mut sphere, translation_matrix);
+        sphere.transform = translation_matrix;
+        assert_eq!(sphere.transform, translation_matrix);
+    }
+    #[test]
+    fn test_intersect_scaled_sphere_with_ray() {
+        let ray = Ray::new(Tuple4D::point(0.0, 0.0, -5.0), Tuple4D::vector(0.0, 0.0, 1.0));
+        let mut sphere = sphere();
+        set_transform(&mut sphere, scaling(2.0, 2.0, 2.0));
+        let xs = intersect(&sphere, ray);
+        assert_eq!(xs.len(), 2);
+        assert_eq!(xs[0].t, 3.0);
+        assert_eq!(xs[1].t, 7.0);
+    }
+    #[test]
+    fn test_intersect_translated_sphere_with_ray() {
+        let ray = Ray::new(Tuple4D::point(0.0, 0.0, -5.0), Tuple4D::vector(0.0, 0.0, 1.0));
+        let mut sphere = sphere();
+        set_transform(&mut sphere, translation(5.0, 0.0, 0.0));
+        let xs = intersect(&sphere, ray);
+        assert_eq!(xs.len(), 0);
     }
 }
