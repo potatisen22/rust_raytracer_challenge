@@ -1436,8 +1436,8 @@ mod tests {
     fn test_normal_on_translated_sphere() {
         let mut my_sphere = sphere();
         set_transform(&mut my_sphere, &translation(0.0, 1.0, 0.0));
-        let my_normal = normal_at(&my_sphere,Tuple4D::point(0.0, 1.70711, -0.70711));
-        assert_eq!(my_normal, Tuple4D::vector(0.0, 0.70711, -0.70711));
+        let my_normal = normal_at(&my_sphere,Tuple4D::point(0.0, 1.70711, -std::f64::consts::FRAC_1_SQRT_2));
+        assert_eq!(my_normal, Tuple4D::vector(0.0, std::f64::consts::FRAC_1_SQRT_2, -std::f64::consts::FRAC_1_SQRT_2));
     }
     #[test]
     fn test_normal_on_transformed_sphere() {
