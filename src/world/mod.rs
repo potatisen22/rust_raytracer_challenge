@@ -3,7 +3,7 @@
 
 use std::thread::yield_now;
 use crate::types;
-use crate::types::{identity_matrix, material, position, scaling, translation, vector, Color, Intersection, Light, Material, Matrix, Ray, Sphere, Tuple4D};
+use crate::types::{hit, identity_matrix, material, position, scaling, translation, vector, Color, Intersection, Light, Material, Matrix, Ray, Sphere, Tuple4D, EPSILON};
 use crate::types::{color, point, point_light, sphere};
 use crate::canvas;
 use crate::canvas::write_pixel;
@@ -27,6 +27,14 @@ pub fn default_world() -> World {
     }
 }
 
+pub fn world() -> World {
+    let light = point_light(point(-10.0, 10.0, -10.0), color(1.0, 1.0, 1.0));
+    World {
+        light,
+        objects: vec![]
+    }
+}
+
 pub fn intersect_world(world: &World, ray: &Ray) -> Vec<Intersection> {
     let mut xs = vec![];
     for object in world.objects.iter() {
@@ -43,14 +51,16 @@ pub struct Computations {
     t: f64,
     object: Sphere,
     point: Tuple4D,
+    over_point: Tuple4D,
     eye_vector: Tuple4D,
     normal_vector: Tuple4D,
     inside: bool
+
 }
 
 impl Computations {
     fn new() -> Self {
-        Computations{ t: 0.0, object: sphere(), point: point(0.0, 0.0, 0.0), eye_vector: vector(0.0, 0.0, 0.0), normal_vector: vector(0.0, 0.0, 0.0), inside: false}
+        Computations{ t: 0.0, object: sphere(), point: point(0.0, 0.0, 0.0), over_point: point(0.0, 0.0, 0.0), eye_vector: vector(0.0, 0.0, 0.0), normal_vector: vector(0.0, 0.0, 0.0), inside: false}
     }
 }
 
@@ -85,12 +95,14 @@ pub fn prepare_computations(intersection: &Intersection, ray: Ray) -> Computatio
         computations.normal_vector = -computations.normal_vector;
     }
     else { computations.inside = false; }
+    computations.over_point = computations.point + computations.normal_vector * EPSILON;
     computations
 }
 
 pub fn shade_hit(world: &World, computations: &Computations) -> Color
 {
-    types::lighting(computations.object.material, world.light, computations.point, computations.eye_vector, computations.normal_vector)
+    let shadowed = is_shadowed(world, computations.over_point);
+    types::lighting(computations.object.material, world.light, computations.over_point, computations.eye_vector, computations.normal_vector, shadowed)
 }
 
 pub fn color_at(world: &World, ray: Ray) -> Color {
@@ -161,11 +173,22 @@ pub fn render(camera: &Camera, world: &World) -> canvas::Canvas {
     }
     image
 }
+
+pub fn is_shadowed(world: &World, point: Tuple4D) -> bool {
+    let distance = world.light.position - point;
+    let ray = Ray::new(point, distance.normalize());
+    let intersections = intersect_world(world, &ray);
+    let h = hit(&intersections);
+    if h.is_some() && h.unwrap().t < distance.magnitude() {
+        true
+    }
+    else { false }
+}
 #[cfg(test)]
 mod tests {
     use std::f64::consts::PI;
     use num_traits::FloatConst;
-    use crate::types::{intersection, rotation_y, scaling, translation, vector};
+    use crate::types::{intersection, rotation_y, scaling, translation, vector, EPSILON};
     use super::*;
 
     #[test]
@@ -359,5 +382,53 @@ mod tests {
         my_camera.transform = view_transform(from, to, up);
         let image = render(&my_camera, &my_world);
         assert_eq!(canvas::pixel_at(&image, 5, 5).unwrap(), color(0.38066, 0.47583, 0.2855));
+    }
+    #[test]
+    fn test_no_shadow_when_nothing_is_collinear_with_point_and_light() {
+        let w = default_world();
+        let p = point(0.0, 10.0, 0.0);
+        assert_eq!(is_shadowed(&w, p), false)
+    }
+    #[test]
+    fn test_shadow_when_object_ist_between_point_and_light() {
+        let w = default_world();
+        let p = point(10.0, -10.0, 10.0);
+        assert_eq!(is_shadowed(&w, p), true)
+    }
+    #[test]
+    fn test_no_shadow_when_object_is_behind_light() {
+        let w = default_world();
+        let p = point(-20.0, 20.0, -20.0);
+        assert_eq!(is_shadowed(&w, p), false)
+    }
+    #[test]
+    fn test_no_shadow_when_object_is_behind_point() {
+        let w = default_world();
+        let p = point(-2.0, 2.0, -2.0);
+        assert_eq!(is_shadowed(&w, p), false)
+    }
+    #[test]
+    fn test_shade_hit_given_intersection_in_shadow() {
+        let mut w = world();
+        w.light = point_light(point(0.0, 0.0, -10.0), color(1.0, 1.0, 1.0));
+        let s1 = sphere();
+        w.objects.push(s1);
+        let mut s2 = sphere();
+        s2.transform = translation(0.0, 0.0, 10.0);
+        w.objects.push(s2);
+        let ray = Ray::new(point(0.0, 0.0, 5.0), vector(0.0, 0.0, 1.0));
+        let i = intersection(4.0, &s2);
+        let c = shade_hit(&w, &prepare_computations(&i, ray));
+        assert_eq!(c, color(0.1, 0.1, 0.1));
+    }
+    #[test]
+    fn test_hit_should_offset_point() {
+        let ray = Ray::new(point(0.0, 0.0, -5.0), vector(0.0, 0.0, 1.0));
+        let mut shape = sphere();
+        shape.transform = translation(0.0, 0.0, 1.0);
+        let i = intersection(5.0, &shape);
+        let comps = prepare_computations(&i, ray);
+        assert!(comps.over_point.z < -EPSILON/2.0);
+        assert!(comps.point.z > comps.over_point.z);
     }
 }
