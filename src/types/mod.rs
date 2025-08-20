@@ -2,7 +2,7 @@
 #![allow(unused_imports)]
 use std::sync::atomic::{AtomicU64, Ordering};
 
-const EPSILON: f64 = 0.00001;
+pub const EPSILON: f64 = 0.00001;
 
 #[derive(Debug, Copy, Clone)]
 pub struct Tuple4D {
@@ -260,7 +260,9 @@ impl<const M: usize> Matrix<M, M> {
     }
 
 }
-
+pub fn identity_matrix<const M: usize>() -> Matrix<M, M> {
+    Matrix::<M,M>::identity()
+}
 impl<const M: usize, const N: usize> std::ops::Index<(usize, usize)> for Matrix<M, N> {
     type Output = f64;
 
@@ -576,7 +578,11 @@ pub struct Light {
     pub position: Tuple4D,
     pub intensity: Color
 }
-
+impl PartialEq for Light {
+    fn eq(&self, other: &Self) -> bool {
+        self.position == other.position && self.intensity == other.intensity
+    }
+}
 pub fn point_light(position: Tuple4D, intensity: Color) -> Light {
     Light { position, intensity }
 }
