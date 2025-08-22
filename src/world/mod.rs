@@ -3,10 +3,11 @@
 
 use std::thread::yield_now;
 use crate::types;
-use crate::types::{hit, identity_matrix, material, position, scaling, translation, vector, Color, Intersection, Light, Material, Matrix, Ray, Sphere, Tuple4D, EPSILON};
-use crate::types::{color, point, point_light, sphere};
+use crate::types::{identity_matrix, material, position, scaling, translation, vector, Color, Light, Material, Matrix, Ray, Tuple4D, EPSILON};
+use crate::types::{color, point, point_light};
 use crate::canvas;
 use crate::canvas::write_pixel;
+use crate::shapes::{hit, sphere, Sphere, Intersection, intersection, intersect, normal_at};
 
 pub struct World {
     pub light: Light,
@@ -38,7 +39,7 @@ pub fn world() -> World {
 pub fn intersect_world(world: &World, ray: &Ray) -> Vec<Intersection> {
     let mut xs = vec![];
     for object in world.objects.iter() {
-        let intersection = types::intersect(object, ray);
+        let intersection = intersect(object, ray);
         for x in intersection {
             xs.push(x);
         }
@@ -88,7 +89,7 @@ pub fn prepare_computations(intersection: &Intersection, ray: Ray) -> Computatio
     computations.object = intersection.object;
     computations.point = position(&ray, computations.t);
     computations.eye_vector = - ray.direction;
-    computations.normal_vector = types::normal_at(&computations.object, computations.point);
+    computations.normal_vector = normal_at(&computations.object, computations.point);
     if types::dot(&computations.normal_vector, &computations.eye_vector) < 0.0
     {
         computations.inside = true;
@@ -111,7 +112,7 @@ pub fn color_at(world: &World, ray: Ray) -> Color {
         color(0.0, 0.0, 0.0)
     }
     else {
-        let hit = types::hit(&intersections).unwrap();
+        let hit = hit(&intersections).unwrap();
         let computations = prepare_computations(&hit, ray);
         shade_hit(world, &computations)
     }
@@ -188,21 +189,21 @@ pub fn is_shadowed(world: &World, point: Tuple4D) -> bool {
 mod tests {
     use std::f64::consts::PI;
     use num_traits::FloatConst;
-    use crate::types::{intersection, rotation_y, scaling, translation, vector, EPSILON};
+    use crate::types::{rotation_y, scaling, translation, vector, EPSILON};
     use super::*;
 
     #[test]
     fn test_default_world() {
         let light = point_light(point(-10.0, 10.0, -10.0), color(1.0, 1.0, 1.0));
-        let mut sphere = sphere();
-        sphere.material.color = color(0.8, 1.0, 0.6);
-        sphere.material.diffuse = 0.7;
-        sphere.material.specular = 0.2;
-        let mut sphere_2 = types::sphere();
+        let mut my_sphere = sphere();
+        my_sphere.material.color = color(0.8, 1.0, 0.6);
+        my_sphere.material.diffuse = 0.7;
+        my_sphere.material.specular = 0.2;
+        let mut sphere_2 = sphere();
         sphere_2.transform = scaling(0.5, 0.5, 0.5);
         let my_world = default_world();
         assert_eq!(my_world.light, light);
-        assert!(my_world.objects[0].transform == sphere.transform && my_world.objects[0].material == sphere.material);
+        assert!(my_world.objects[0].transform == my_sphere.transform && my_world.objects[0].material == my_sphere.material);
         assert!(my_world.objects[1].transform == sphere_2.transform && my_world.objects[1].material == sphere_2.material);
     }
     #[test]
